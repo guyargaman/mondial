@@ -1,4 +1,4 @@
-  <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8"/>
@@ -995,7 +995,7 @@ function gd(){
     return d;
   }catch(e){return{users:{},results:{},live:{}};}
 }
-const sd = d => localStorage.setItem(KEY, JSON.stringify(d));
+const sd = d => { localStorage.setItem(KEY, JSON.stringify(d)); sbPush(d); };
 
 // תמיד דרוס תוצאות רשמיות מהקוד
 function initResults(){
@@ -1050,6 +1050,12 @@ function login(silent){
   // התחבר אוטומטית לקבוצת הצ'אט לסנכרון ניחושים
   const _savedRoom=gd().chatRoom;
   if(_savedRoom && !mqttClient) connectChat(_savedRoom);
+  // טען מ-Supabase אם יש קבוצה שמורה
+  if(_savedRoom){
+    sbPull(_savedRoom).then(remote=>{
+      if(remote){const merged=sbMerge(remote,gd());localStorage.setItem(KEY,JSON.stringify(merged));renderMatches();renderBoard();}
+    });
+  }
   if(!silent) setTimeout(()=>showBanner(`ברוך הבא חזרה, ${n}! 👋`,'⚽',2500),400);
   else setTimeout(()=>showBanner(`ברוך הבא, ${n}! 🏆 בהצלחה במונדיאל!`,'⚽',3000),800);
 }
@@ -2776,6 +2782,51 @@ function openKoResAdmin(rndKey,idx){
 // 💬 CHAT — real-time via public MQTT broker (HiveMQ)
 // ══════════════════════════════════════════════════════════
 const MQTT_URL='wss://broker.hivemq.com:8884/mqtt';
+
+// ── SUPABASE SYNC ────────────────────────────────────────
+const SB_URL='https://wanmbztphilocjnotoxu.supabase.co';
+const SB_KEY='sb_publishable_eFgft39wT6XWF0itNnCItQ_RNmLa7DG';
+
+async function sbPush(d){
+  if(!d||!d.chatRoom) return;
+  try{
+    const body={...d};
+    delete body.live; // לא שומרים ניקוד חי
+    delete body.chatMsgs; // צ'אט לא צריך גיבוי
+    await fetch(`${SB_URL}/rest/v1/mondial_rooms`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Prefer':'resolution=merge-duplicates'},
+      body:JSON.stringify({room_code:d.chatRoom,data:body,updated_at:new Date().toISOString()})
+    });
+  }catch(e){}
+}
+
+async function sbPull(room){
+  if(!room) return null;
+  try{
+    const res=await fetch(`${SB_URL}/rest/v1/mondial_rooms?room_code=eq.${encodeURIComponent(room)}&select=data`,{
+      headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}
+    });
+    const rows=await res.json();
+    if(Array.isArray(rows)&&rows.length>0) return rows[0].data;
+  }catch(e){}
+  return null;
+}
+
+function sbMerge(remote,local){
+  if(!remote) return local;
+  const m={...remote};
+  m.users={...(remote.users||{}),...(local.users||{})};
+  m.chatRoom=local.chatRoom||remote.chatRoom;
+  if(local.chatMsgs) m.chatMsgs=local.chatMsgs;
+  if(local.live) m.live=local.live;
+  m.results={...(local.results||{}),...(remote.results||{})};
+  if(remote.specialResults) m.specialResults=remote.specialResults;
+  if(remote.koResults) m.koResults=remote.koResults;
+  m.specials={...(local.specials||{}),...(remote.specials||{})};
+  m.knockout={...(local.knockout||{}),...(remote.knockout||{})};
+  return m;
+}
 let mqttClient=null, chatRoom=null, chatConnected=false;
 let chatMsgs=[], unreadCount=0, chatOpen=false;
 
@@ -2949,7 +3000,10 @@ function joinGroupFromInput(){
   chatRoom=code; chatMsgs=[];
   connectChat(code);
   showBanner('מתחבר לקבוצה '+code+'...','📡',2500);
-  setTimeout(renderGroup,400);
+  sbPull(code).then(remote=>{
+    if(remote){const merged=sbMerge(remote,gd());localStorage.setItem(KEY,JSON.stringify(merged));renderMatches();renderBoard();}
+    setTimeout(renderGroup,400);
+  });
 }
 
 function shareGroupLink(){
@@ -3091,7 +3145,10 @@ function joinRoom(){
   if(code.length<4){alert('קוד לא תקין — צריך לפחות 4 תווים');return;}
   const d=gd(); d.chatRoom=code; d.groupUsers=[]; sd(d);
   connectChat(code);
-  renderChatMain();
+  sbPull(code).then(remote=>{
+    if(remote){const merged=sbMerge(remote,gd());localStorage.setItem(KEY,JSON.stringify(merged));renderMatches();renderBoard();}
+    renderChatMain();
+  });
 }
 
 function shareRoom(){
